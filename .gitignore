@@ -1,0 +1,65 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editors and local settings
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.env
+.env.*
+*.key
+*.pem
+
+# Trained models and experiment artifacts
+trained_models/
+saved_models*/
+catboost_info/
+checkpoints/
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.hdf5
+*.bin
+
+# Data and generated outputs stay in OneDrive
+data/
+datasets/
+output*/
+*_output/
+results*/
+*_results/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.zip
+
+# Generated figures and reports
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+*.html
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+~$*

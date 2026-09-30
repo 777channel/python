@@ -1,0 +1,369 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+import numpy as np
+import matplotlib.patches as mpatches
+from matplotlib.patches import Patch
+import os
+import ast
+
+# ==================== 全局字体设置 (Global Font Settings) ====================
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman']
+plt.rcParams['font.weight'] = 'bold'
+plt.rcParams['axes.labelweight'] = 'bold'
+plt.rcParams['axes.titleweight'] = 'bold'
+plt.rcParams['axes.unicode_minus'] = False
+plt.rcParams['mathtext.fontset'] = 'custom'
+plt.rcParams['mathtext.rm'] = 'Times New Roman'
+plt.rcParams['mathtext.bf'] = 'Times New Roman:bold'
+plt.rcParams['font.size'] = 26
+plt.rcParams['axes.labelsize'] = 22
+plt.rcParams['axes.titlesize'] = 22
+plt.rcParams['xtick.labelsize'] = 22
+plt.rcParams['ytick.labelsize'] = 22
+plt.rcParams['legend.fontsize'] = 24
+# 设置坐标轴线条宽度
+plt.rcParams['axes.linewidth'] = 2
+plt.rcParams['xtick.major.width'] = 2
+plt.rcParams['ytick.major.width'] = 2
+
+def parse_list_string(list_str):
+    """
+    解析字符串格式的列表，支持多种格式
+    返回: [正值列表]
+    """
+    if pd.isna(list_str) or list_str == '' or list_str == 'nan':
+        return []
+    
+    try:
+        # 清理字符串
+        clean_str = str(list_str).strip()
+        
+        # 方法1：使用ast.literal_eval（最安全）
+        try:
+            values = ast.literal_eval(clean_str)
+            if isinstance(values, list):
+                result = [abs(float(x)) for x in values]
+                return result
+        except:
+            pass
+        
+        # 方法2：使用eval（备用）
+        try:
+            if clean_str.startswith('[') and clean_str.endswith(']'):
+                values = eval(clean_str)
+                if isinstance(values, list):
+                    result = [abs(float(x)) for x in values]
+                    return result
+        except:
+            pass
+        
+        # 方法3：手动解析
+        try:
+            # 去除方括号
+            clean_str = clean_str.strip('[]')
+            # 分割并转换
+            values = [abs(float(x.strip())) for x in clean_str.split(',') if x.strip()]
+            return values
+        except:
+            pass
+            
+        return []
+        
+    except Exception as e:
+        print(f"❌ 解析错误: {e}")
+        return []
+
+def load_and_process_simple_excel(excel_filepath):
+    """
+    读取简单的Excel文件，只有4列数据
+    """
+    try:
+        print(f"📂 读取Excel文件: {excel_filepath}")
+        
+        # 读取Excel文件
+        df = pd.read_excel(excel_filepath)
+        print(f"✅ 成功读取: {df.shape}")
+        print(f"📋 列名: {list(df.columns)}")
+        
+        # 地区名称按行号对应
+        region_names = ['Northeast', 'North China', 'Central China', 'South China', 'East China', 'Southwest']
+        
+        # 处理数据
+        processed_data = {}
+        
+        for idx, row in df.iterrows():
+            if idx >= len(region_names):
+                print(f"⚠️ 跳过第{idx+1}行，超出预期地区数量")
+                continue
+                
+            region_name = region_names[idx]
+            print(f"\n🔄 处理第{idx+1}行: {region_name}")
+            
+            # 解析4列数据
+            region_data = {}
+            data_columns = ['Cd_Natural_Decay_Rates', 'Cd_Artificial_Decay_Rates', 
+                           'pH_Natural_Decay_Rates', 'pH_Artificial_Decay_Rates']
+            
+            for col in data_columns:
+                if col in df.columns:
+                    raw_data = row[col]
+                    parsed_data = parse_list_string(raw_data)
+                    region_data[col] = parsed_data
+                    print(f"  {col}: {len(parsed_data)} 个数据点")
+                else:
+                    region_data[col] = []
+                    print(f"  {col}: 列不存在")
+            
+            processed_data[region_name] = region_data
+        
+        print(f"\n✅ 总共处理了 {len(processed_data)} 个地区")
+        return processed_data
+        
+    except Exception as e:
+        print(f"❌ 文件读取错误: {e}")
+        return {}
+
+def draw_single_subplot(ax, region_data, region_name, years=None, is_bottom_row=False, is_left_col=False):
+    """
+    在单个子图上绘制4条曲线 (保持原有绘制方法)
+    """
+    print(f"    🎨 绘制子图: '{region_name}'")
+    
+    # 检查数据长度，自动确定年份
+    if years is None:
+        data_length = 0
+        for col in ['Cd_Natural_Decay_Rates', 'pH_Natural_Decay_Rates', 
+                   'Cd_Artificial_Decay_Rates', 'pH_Artificial_Decay_Rates']:
+            if len(region_data.get(col, [])) > 0:
+                data_length = len(region_data[col])
+                break
+        
+        if data_length == 0:
+            years = list(range(1, 10))  # 默认1-9年
+        else:
+            years = list(range(1, data_length + 1))
+    
+    # 4条线的配置 (保持原有配置)
+    line_configs = [
+        {'color': '#2E8B57', 'marker': 'o', 'linestyle': '-', 'linewidth': 3, 'markersize': 8, 'label': 'Natural Cd'},
+        {'color': '#4682B4', 'marker': 's', 'linestyle': '-', 'linewidth': 3, 'markersize': 8, 'label': 'Natural pH-S'},
+        {'color': '#DC143C', 'marker': '^', 'linestyle': '--', 'linewidth': 3, 'markersize': 8, 'label': 'Artificial Cd'},
+        {'color': '#FF8C00', 'marker': 'D', 'linestyle': '--', 'linewidth': 3, 'markersize': 8, 'label': 'Artificial pH-S'}
+    ]
+    
+    # 对应的数据列
+    data_columns = ['Cd_Natural_Decay_Rates', 'pH_Natural_Decay_Rates', 
+                   'Cd_Artificial_Decay_Rates', 'pH_Artificial_Decay_Rates']
+    
+    lines_drawn = 0
+    legend_handles = []
+    
+    # 绘制4条曲线
+    for i, col in enumerate(data_columns):
+        data = region_data.get(col, [])
+        if len(data) == len(years):  # 确保数据点数量正确
+            line = ax.plot(years, data, alpha=0.9, **line_configs[i])
+            legend_handles.extend(line)
+            lines_drawn += 1
+            print(f"    📈 绘制曲线 {i+1}: {col} = {len(data)}个数据点")
+        else:
+            print(f"    ⚠️ 跳过 {col}: 数据点不匹配 (有{len(data)}个，需要{len(years)}个)")
+    
+    # 计算RMSE (均方根误差) - 保持原有逻辑
+    rmse_results = {}
+    
+    # Cd RMSE
+    cd_natural = region_data.get('Cd_Natural_Decay_Rates', [])
+    cd_artificial = region_data.get('Cd_Artificial_Decay_Rates', [])
+    if len(cd_natural) == len(years) and len(cd_artificial) == len(years):
+        try:
+            cd_natural_array = np.array(cd_natural)
+            cd_artificial_array = np.array(cd_artificial)
+            cd_rmse = np.sqrt(np.mean((cd_natural_array - cd_artificial_array) ** 2))
+            rmse_results['cd'] = cd_rmse
+        except:
+            pass
+    
+    # pH RMSE
+    ph_natural = region_data.get('pH_Natural_Decay_Rates', [])
+    ph_artificial = region_data.get('pH_Artificial_Decay_Rates', [])
+    if len(ph_natural) == len(years) and len(ph_artificial) == len(years):
+        try:
+            ph_natural_array = np.array(ph_natural)
+            ph_artificial_array = np.array(ph_artificial)
+            ph_rmse = np.sqrt(np.mean((ph_natural_array - ph_artificial_array) ** 2))
+            rmse_results['ph'] = ph_rmse
+        except:
+            pass
+    
+    # 显示RMSE结果 (保持原有样式)
+    text_lines = []
+    if 'cd' in rmse_results:
+        text_lines.append(f"Cd RMSE={rmse_results['cd']:.4f}")
+    if 'ph' in rmse_results:
+        text_lines.append(f"pH RMSE={rmse_results['ph']:.4f}")
+    
+    if text_lines:
+        rmse_text = '\n'.join(text_lines)
+        ax.text(0.95, 0.95, rmse_text, transform=ax.transAxes, 
+                fontsize=16, fontweight='bold', va='top', ha='right')
+    
+    # 设置坐标轴标签
+    if is_left_col:
+        ax.set_ylabel('attenuation Rate', fontweight='bold', fontsize=18)
+    
+    if is_bottom_row:
+        ax.set_xlabel('Aging Years', fontweight='bold', fontsize=18)
+    
+    # 设置x轴刻度
+    ax.set_xticks(years)
+    ax.set_xticklabels([f'{int(y)}' for y in years], fontweight='bold')
+    
+    # 设置标题
+    ax.set_title(region_name, fontweight='bold', pad=15, fontsize=22)
+    
+    # 格式化 (保持原有格式)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontweight('bold')
+    
+    # 美化 (保持原有样式 + 加粗坐标轴)
+    ax.margins(x=0.1, y=0.1)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(2)
+    ax.spines['bottom'].set_linewidth(2)
+    ax.tick_params(axis='both', width=2, length=6)
+    ax.grid(True, linestyle="--", alpha=0.3)
+    
+    print(f"    ✅ 子图完成: 绘制了{lines_drawn}条曲线")
+    return legend_handles, lines_drawn
+
+def create_2x3_regional_degradation_figure(excel_filepath, output_dir='./figures'):
+    """
+    创建2×3布局的地区衰减分析图表
+    """
+    print("🎨 创建2×3地区衰减分析图表...")
+    print("=" * 60)
+    
+    # 读取和处理数据
+    processed_data = load_and_process_simple_excel(excel_filepath)
+    
+    if not processed_data:
+        print("❌ 没有可处理的数据!")
+        return
+    
+    print(f"\n🌍 处理 {len(processed_data)} 个地区:")
+    for region_name, region_data in processed_data.items():
+        print(f"  📍 {region_name}")
+    
+    # 确保输出目录存在
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"📁 创建输出目录: {output_dir}")
+    
+    # 定义区域顺序
+    region_order = ['Northeast', 'North China', 'Central China', 'South China', 'East China', 'Southwest']
+    
+    # 创建2×3的子图布局
+    fig, axes = plt.subplots(2, 3, figsize=(18, 20))
+    fig.subplots_adjust(hspace=0.6, wspace=0.4)
+    
+    all_legend_handles = []
+    total_subplots = 0
+    total_lines = 0
+    
+    # 按指定顺序绘制每个区域
+    for idx, region_name in enumerate(region_order):
+        row = idx // 3  # 行索引 (0或1)
+        col = idx % 3   # 列索引 (0,1,2)
+        
+        # 获取当前区域的数据
+        region_data = processed_data.get(region_name, {})
+        
+        if not region_data:
+            # 如果没有该区域的数据，隐藏该子图
+            axes[row, col].set_visible(False)
+            print(f"⚠️ No data found for region: {region_name}")
+            continue
+        
+        print(f"  Processing region [{row+1}, {col+1}]: {region_name}")
+        
+        # 确定是否为边缘位置
+        is_bottom_row = (row == 1)
+        is_left_col = (col == 0)
+        
+        # 绘制该区域的子图
+        handles, lines_count = draw_single_subplot(
+            axes[row, col], region_data, region_name,
+            is_bottom_row=is_bottom_row, is_left_col=is_left_col
+        )
+        
+        total_lines += lines_count
+        total_subplots += 1
+        
+        if handles and not all_legend_handles:  # 只收集第一个有效子图的图例
+            all_legend_handles = handles
+    
+    print(f"✅ 创建了 {total_subplots} 个子图，总共 {total_lines} 条曲线")
+    
+    # 添加主标题 (保持原有样式)
+    main_title = 'Degradation Analysis (RMSE)'
+    fig.suptitle(main_title, fontsize=24, fontweight='bold', y=0.97)
+    
+    # 添加统一图例 (保持原有样式)
+    if all_legend_handles:
+        fig.legend(handles=all_legend_handles[:4],
+                  loc='center', 
+                  bbox_to_anchor=(0.5, 0.93),
+                  ncol=4,
+                  frameon=False,
+                  prop={'family': 'Times New Roman', 'weight': 'bold', 'size': 20})
+    
+    # 调整布局
+    plt.tight_layout(rect=[0, 0.08, 1, 0.92])
+    
+    # 保存图表
+    filename = "Regional_Degradation_Analysis_RMSE"
+    png_path = os.path.join(output_dir, f"{filename}.png")
+    pdf_path = os.path.join(output_dir, f"{filename}.pdf")
+    
+    plt.savefig(png_path, dpi=600, bbox_inches='tight', facecolor='white')
+    plt.savefig(pdf_path, bbox_inches='tight', facecolor='white')
+    
+    print(f"✅ 保存图表:")
+    print(f"   📁 PNG: {png_path}")
+    print(f"   📁 PDF: {pdf_path}")
+    print(f"   📊 子图数量: {total_subplots}")
+    print(f"   📊 总曲线数: {total_lines}")
+    
+    plt.close()
+
+# ==================== 主程序 ====================
+if __name__ == "__main__":
+    print("🎨 2×3地区衰减分析图表生成器 (使用RMSE)")
+    print("=" * 60)
+    print("📋 处理流程:")
+    print("  ✅ 读取Excel文件 (4列数据)")
+    print("  ✅ 按行号对应地区: 东北、华北、华中、华南、华东、西南")
+    print("  ✅ 2×3网格布局: 每个地区一个子图")
+    print("  ✅ 每个子图4条曲线: Natural/Artificial × Cd/pH")
+    print("  ✅ 支持任意数量的数据点")
+    print("  ✅ 使用RMSE衡量曲线相似性")
+    print("=" * 60)
+    
+    # 文件路径
+    excel_file = r'C:\Users\AMDYE\OneDrive\桌面\衰减率和误差.xlsx'
+    output_directory = './figures'
+    
+    # 生成图表
+    create_2x3_regional_degradation_figure(excel_file, output_directory)
+    
+    print("\n" + "=" * 60)
+    print("🎉 2×3地区衰减分析完成! (使用RMSE)")
+    print("📁 请检查 ./figures 目录中的生成图表")
+    print("📝 图表中显示的RMSE值: 值越小表示Natural和Artificial曲线越接近")
+    print("=" * 60)

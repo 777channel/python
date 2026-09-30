@@ -1,0 +1,1442 @@
+# -*- coding: utf-8 -*-
+import os
+import warnings
+import numpy as np
+import pandas as pd
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split, KFold, cross_validate
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+# XGBoost
+from xgboost import XGBRegressor
+
+# AdaBoost
+from sklearn.ensemble import AdaBoostRegressor
+warnings.filterwarnings("ignore")
+
+try:
+    import optuna
+except ImportError:
+    optuna = None
+
+try:
+    from catboost import CatBoostRegressor
+except ImportError:
+    CatBoostRegressor = None
+
+try:
+    from lightgbm import LGBMRegressor
+except ImportError:
+    LGBMRegressor = None
+
+try:
+    from tabpfn import TabPFNRegressor
+except ImportError:
+    TabPFNRegressor = None
+
+
+# =========================
+# 路径设置
+# =========================
+file_path = r"C:\Users\AMDYE\OneDrive\桌面\训练版本(1).xlsx"
+output_dir = r"C:\Users\AMDYE\OneDrive\python\机器学习\C-G结果\SPXY划分结果"
+os.makedirs(output_dir, exist_ok=True)
+
+target_col = "C-G"
+random_state = 42
+n_trials = 100
+
+model_names = [
+    "CatBoost",
+    "TabPFN",
+    "GBRT",
+    "RandomForest",
+    "XGBoost",
+    "AdaBoost"
+]
+
+
+# =========================
+# 字体设置
+# =========================
+mpl.rcParams.update({
+    "font.family": "Times New Roman",
+    "font.size": 24,
+    "font.weight": "bold",
+    "axes.labelweight": "bold",
+    "axes.titleweight": "bold",
+    "axes.titlesize": 24,
+    "axes.labelsize": 24,
+    "xtick.labelsize": 24,
+    "ytick.labelsize": 24,
+    "legend.fontsize": 24,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "mathtext.fontset": "custom",
+    "mathtext.rm": "Times New Roman",
+    "mathtext.it": "Times New Roman:italic",
+    "mathtext.bf": "Times New Roman:bold"
+})
+
+
+# =========================
+# 数据读取
+# =========================
+def load_data(path):
+    if path.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(path)
+    else:
+        df = pd.read_csv(path, encoding="utf-8-sig")
+
+    df.columns = [
+        str(c).strip().lstrip("\ufeff")
+        for c in df.columns
+    ]
+
+    for col in df.columns:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+    return df
+
+
+# =========================
+# 按输出列分层抽样
+# =========================
+def make_y_strata(y, max_bins=5):
+    for q in range(max_bins, 1, -1):
+        try:
+            strata = pd.qcut(
+                y,
+                q=q,
+                labels=False,
+                duplicates="drop"
+            )
+
+            counts = strata.value_counts().sort_index()
+
+            if len(counts) >= 2 and counts.min() >= 2:
+                return strata
+
+        except Exception:
+            continue
+
+    return None
+
+
+# =========================
+# SPXY划分
+# =========================
+def spxy_split(X, y, test_size=0.30, distance="auto"):
+    """
+    改良版SPXY划分函数。
+
+    distance参数：
+    - "euclidean"  ：只使用欧氏距离
+    - "manhattan"  ：只使用曼哈顿距离
+    - "auto"       ：同时计算欧氏距离和曼哈顿距离，并自动选择测试集y分布更接近整体y分布的方案
+
+    返回：
+    X_train_raw, X_test_raw, y_train, y_test
+    """
+
+    def _single_spxy_split(X, y, test_size=0.30, distance_type="euclidean"):
+        X_for_split = X.copy()
+
+        X_for_split = X_for_split.apply(
+            lambda col: col.fillna(col.median()),
+            axis=0
+        )
+
+        y_for_split = y.copy()
+        y_for_split = y_for_split.fillna(y_for_split.median())
+
+        X_values = X_for_split.values.astype(float)
+        y_values = y_for_split.values.reshape(-1, 1).astype(float)
+
+        X_scaled = StandardScaler().fit_transform(X_values)
+        y_scaled = StandardScaler().fit_transform(y_values)
+
+        n_samples = X_scaled.shape[0]
+        n_train = int(round(n_samples * (1 - test_size)))
+
+        if n_train < 2:
+            raise ValueError("训练集样本数过少，无法进行SPXY划分。")
+
+        diff_x = X_scaled[:, None, :] - X_scaled[None, :, :]
+        diff_y = y_scaled[:, None, :] - y_scaled[None, :, :]
+
+        if distance_type == "euclidean":
+            dist_x = np.sqrt(
+                np.sum(
+                    diff_x ** 2,
+                    axis=2
+                )
+            )
+
+            dist_y = np.sqrt(
+                np.sum(
+                    diff_y ** 2,
+                    axis=2
+                )
+            )
+
+        elif distance_type == "manhattan":
+            dist_x = np.sum(
+                np.abs(diff_x),
+                axis=2
+            )
+
+            dist_y = np.sum(
+                np.abs(diff_y),
+                axis=2
+            )
+
+        else:
+            raise ValueError("distance_type只能为'euclidean'或'manhattan'。")
+
+        if dist_x.max() > 0:
+            dist_x = dist_x / dist_x.max()
+
+        if dist_y.max() > 0:
+            dist_y = dist_y / dist_y.max()
+
+        dist_xy = dist_x + dist_y
+
+        first_pair = np.unravel_index(
+            np.argmax(dist_xy),
+            dist_xy.shape
+        )
+
+        train_indices = [
+            first_pair[0],
+            first_pair[1]
+        ]
+
+        remaining_indices = [
+            i for i in range(n_samples)
+            if i not in train_indices
+        ]
+
+        while len(train_indices) < n_train:
+            candidate_min_distances = []
+
+            for idx in remaining_indices:
+                min_dist = np.min(
+                    dist_xy[idx, train_indices]
+                )
+
+                candidate_min_distances.append(
+                    min_dist
+                )
+
+            selected_pos = int(
+                np.argmax(candidate_min_distances)
+            )
+
+            selected_idx = remaining_indices[
+                selected_pos
+            ]
+
+            train_indices.append(
+                selected_idx
+            )
+
+            remaining_indices.remove(
+                selected_idx
+            )
+
+        test_indices = remaining_indices
+
+        X_train_raw = X.iloc[train_indices].copy()
+        X_test_raw = X.iloc[test_indices].copy()
+        y_train = y.iloc[train_indices].copy()
+        y_test = y.iloc[test_indices].copy()
+
+        return X_train_raw, X_test_raw, y_train, y_test
+
+    def _score_split(y_all, y_train, y_test):
+        y_all = pd.Series(y_all).dropna()
+        y_train = pd.Series(y_train).dropna()
+        y_test = pd.Series(y_test).dropna()
+
+        all_range = y_all.max() - y_all.min()
+
+        if all_range == 0:
+            all_range = 1
+
+        test_range = y_test.max() - y_test.min()
+
+        range_score = abs(
+            test_range / all_range - test_size
+        )
+
+        mean_score = abs(
+            y_test.mean() - y_all.mean()
+        ) / all_range
+
+        std_score = abs(
+            y_test.std() - y_all.std()
+        ) / all_range
+
+        score = (
+            range_score
+            + mean_score
+            + std_score
+        )
+
+        return score
+
+    if distance == "euclidean":
+        print("\nSPXY distance method: Euclidean")
+
+        return _single_spxy_split(
+            X,
+            y,
+            test_size=test_size,
+            distance_type="euclidean"
+        )
+
+    if distance == "manhattan":
+        print("\nSPXY distance method: Manhattan")
+
+        return _single_spxy_split(
+            X,
+            y,
+            test_size=test_size,
+            distance_type="manhattan"
+        )
+
+    if distance == "auto":
+        euclidean_result = _single_spxy_split(
+            X,
+            y,
+            test_size=test_size,
+            distance_type="euclidean"
+        )
+
+        manhattan_result = _single_spxy_split(
+            X,
+            y,
+            test_size=test_size,
+            distance_type="manhattan"
+        )
+
+        _, _, y_train_e, y_test_e = euclidean_result
+        _, _, y_train_m, y_test_m = manhattan_result
+
+        euclidean_score = _score_split(
+            y,
+            y_train_e,
+            y_test_e
+        )
+
+        manhattan_score = _score_split(
+            y,
+            y_train_m,
+            y_test_m
+        )
+
+        print("\nSPXY auto comparison:")
+        print(f"Euclidean score : {euclidean_score:.6f}")
+        print(f"Manhattan score : {manhattan_score:.6f}")
+
+        if manhattan_score < euclidean_score:
+            print("Selected SPXY distance method: Manhattan")
+            return manhattan_result
+
+        else:
+            print("Selected SPXY distance method: Euclidean")
+            return euclidean_result
+
+    raise ValueError("distance只能为'euclidean'、'manhattan'或'auto'。")
+
+
+# =========================
+# OM、Cd log1p转换
+# =========================
+def log_transform_om_cd(X_train, X_test):
+    X_train_t = X_train.copy()
+    X_test_t = X_test.copy()
+
+    log_cols = [
+        col for col in ["OM", "Cd"]
+        if col in X_train_t.columns
+    ]
+
+    for col in log_cols:
+        if (X_train_t[col] <= -1).any() or (X_test_t[col] <= -1).any():
+            raise ValueError(
+                f"{col}列存在小于或等于-1的值，无法进行log1p转换。"
+            )
+
+        X_train_t[col] = np.log1p(X_train_t[col])
+        X_test_t[col] = np.log1p(X_test_t[col])
+
+    return X_train_t, X_test_t, log_cols
+
+
+# =========================
+# 模型包装
+# =========================
+def wrap_model_if_needed(model_name, model):
+    if model_name == "SVR":
+        return Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", model)
+        ])
+
+    return model
+
+
+# =========================
+# 扩展贝叶斯优化范围
+# =========================
+def get_model(model_name, trial=None):
+
+    if model_name == "TabPFN":
+        if TabPFNRegressor is None:
+            raise ImportError("TabPFN is not installed.")
+        return TabPFNRegressor()
+
+    if model_name == "CatBoost":
+        if CatBoostRegressor is None:
+            raise ImportError("CatBoost is not installed.")
+
+        if trial is None:
+            return CatBoostRegressor(
+                loss_function="RMSE",
+                random_state=random_state,
+                verbose=0
+            )
+
+        return CatBoostRegressor(
+            iterations=trial.suggest_int("iterations", 100, 3000),
+            depth=trial.suggest_int("depth", 2, 12),
+            learning_rate=trial.suggest_float("learning_rate", 0.0005, 0.25, log=True),
+            l2_leaf_reg=trial.suggest_float("l2_leaf_reg", 1e-3, 500.0, log=True),
+            random_strength=trial.suggest_float("random_strength", 1e-5, 100.0, log=True),
+            bagging_temperature=trial.suggest_float("bagging_temperature", 0.0, 20.0),
+            rsm=trial.suggest_float("rsm", 0.3, 1.0),
+            border_count=trial.suggest_int("border_count", 16, 254),
+            loss_function="RMSE",
+            random_state=random_state,
+            verbose=0
+        )
+
+    if model_name == "GBRT":
+        if trial is None:
+            return GradientBoostingRegressor(
+                random_state=random_state
+            )
+
+        return GradientBoostingRegressor(
+            n_estimators=trial.suggest_int("n_estimators", 50, 2000),
+            learning_rate=trial.suggest_float("learning_rate", 0.0005, 0.25, log=True),
+            max_depth=trial.suggest_int("max_depth", 2, 12),
+            min_samples_split=trial.suggest_int("min_samples_split", 2, 60),
+            min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 30),
+            subsample=trial.suggest_float("subsample", 0.4, 1.0),
+            max_features=trial.suggest_categorical(
+                "max_features",
+                [None, "sqrt", "log2", 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+            ),
+            random_state=random_state
+        )
+
+    if model_name == "RandomForest":
+        if trial is None:
+            return RandomForestRegressor(
+                random_state=random_state,
+                n_jobs=-1
+            )
+
+        return RandomForestRegressor(
+            n_estimators=trial.suggest_int("n_estimators", 100, 2500),
+            max_depth=trial.suggest_int("max_depth", 2, 80),
+            min_samples_split=trial.suggest_int("min_samples_split", 2, 60),
+            min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 30),
+            max_features=trial.suggest_categorical(
+                "max_features",
+                ["sqrt", "log2", 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
+            ),
+            bootstrap=trial.suggest_categorical("bootstrap", [True, False]),
+            random_state=random_state,
+            n_jobs=-1
+        )
+
+    if model_name == "XGBoost":
+        if XGBRegressor is None:
+            raise ImportError("XGBoost is not installed.")
+
+        if trial is None:
+            return XGBRegressor(
+                objective="reg:squarederror",
+                random_state=random_state,
+                n_jobs=-1
+            )
+
+        return XGBRegressor(
+            n_estimators=trial.suggest_int("n_estimators", 100, 3000),
+            max_depth=trial.suggest_int("max_depth", 2, 14),
+            learning_rate=trial.suggest_float("learning_rate", 0.0005, 0.25, log=True),
+            subsample=trial.suggest_float("subsample", 0.3, 1.0),
+            colsample_bytree=trial.suggest_float("colsample_bytree", 0.3, 1.0),
+            colsample_bylevel=trial.suggest_float("colsample_bylevel", 0.3, 1.0),
+            colsample_bynode=trial.suggest_float("colsample_bynode", 0.3, 1.0),
+            min_child_weight=trial.suggest_float("min_child_weight", 0.01, 200.0, log=True),
+            gamma=trial.suggest_float("gamma", 1e-8, 100.0, log=True),
+            reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 500.0, log=True),
+            reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 500.0, log=True),
+            objective="reg:squarederror",
+            random_state=random_state,
+            n_jobs=-1
+        )
+
+    if model_name == "AdaBoost":
+        if trial is None:
+            return AdaBoostRegressor(
+                random_state=random_state
+            )
+
+        return AdaBoostRegressor(
+            n_estimators=trial.suggest_int("n_estimators", 50, 2000),
+            learning_rate=trial.suggest_float("learning_rate", 0.0005, 2.0, log=True),
+            loss=trial.suggest_categorical(
+                "loss",
+                ["linear", "square", "exponential"]
+            ),
+            random_state=random_state
+        )
+
+    raise ValueError(f"Unknown model: {model_name}")
+
+# =========================
+# 贝叶斯优化
+# =========================
+def bayes_optimize(model_name, X_train, y_train):
+    if model_name == "TabPFN":
+        model = get_model("TabPFN")
+
+        cv = KFold(
+            n_splits=5,
+            shuffle=True,
+            random_state=random_state
+        )
+
+        result = cross_validate(
+            model,
+            X_train,
+            y_train,
+            cv=cv,
+            scoring="r2",
+            n_jobs=1
+        )
+
+        return model, {"TabPFN": "Default parameters"}, result["test_score"].mean()
+
+    if optuna is None:
+        raise ImportError("Optuna is not installed.")
+
+    def objective(trial):
+        model = get_model(
+            model_name,
+            trial
+        )
+
+        model = wrap_model_if_needed(
+            model_name,
+            model
+        )
+
+        cv = KFold(
+            n_splits=5,
+            shuffle=True,
+            random_state=random_state
+        )
+
+        result = cross_validate(
+            model,
+            X_train,
+            y_train,
+            cv=cv,
+            scoring="r2",
+            n_jobs=-1
+        )
+
+        return result["test_score"].mean()
+
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(
+            seed=random_state
+        )
+    )
+
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        show_progress_bar=False
+    )
+
+    best_model = get_model(
+        model_name,
+        study.best_trial
+    )
+
+    best_model = wrap_model_if_needed(
+        model_name,
+        best_model
+    )
+
+    return best_model, study.best_params, study.best_value
+
+
+# =========================
+# 指标计算
+# =========================
+def calc_metrics(y_true, y_pred, prefix):
+    mse = mean_squared_error(
+        y_true,
+        y_pred
+    )
+
+    return {
+        f"{prefix}_MSE": mse,
+        f"{prefix}_RMSE": np.sqrt(mse),
+        f"{prefix}_MAE": mean_absolute_error(y_true, y_pred),
+        f"{prefix}_R2": r2_score(y_true, y_pred)
+    }
+
+
+# =========================
+# 熵权-TOPSIS排序
+# =========================
+def topsis_ranking(df):
+    """
+    熵权-TOPSIS排序。
+    成本型指标：Test_MSE、Test_RMSE、Test_MAE，越小越好；
+    效益型指标：Test_R2，越大越好。
+    返回结果中包含：
+    1) Entropy_Weight_*：各评价指标的熵权；
+    2) TOPSIS_Score：熵权-TOPSIS得分；
+    3) TOPSIS_Weight：基于TOPSIS_Score归一化后的模型权重。
+    """
+    df = df.copy()
+
+    metric_cols = [
+        "Test_MSE",
+        "Test_RMSE",
+        "Test_MAE",
+        "Test_R2"
+    ]
+
+    metric_df = df[metric_cols].copy()
+
+    norm_df = pd.DataFrame(
+        index=metric_df.index
+    )
+
+    # 成本型指标：MSE、RMSE、MAE，越小越好，转为越大越好
+    for col in [
+        "Test_MSE",
+        "Test_RMSE",
+        "Test_MAE"
+    ]:
+        max_v = metric_df[col].max()
+        min_v = metric_df[col].min()
+
+        if max_v == min_v:
+            norm_df[col] = 1.0
+        else:
+            norm_df[col] = (max_v - metric_df[col]) / (max_v - min_v)
+
+    # 效益型指标：R2，越大越好
+    max_r2 = metric_df["Test_R2"].max()
+    min_r2 = metric_df["Test_R2"].min()
+
+    if max_r2 == min_r2:
+        norm_df["Test_R2"] = 1.0
+    else:
+        norm_df["Test_R2"] = (metric_df["Test_R2"] - min_r2) / (max_r2 - min_r2)
+
+    # 防止log(0)
+    norm_df = norm_df + 1e-12
+
+    # 熵权法计算指标权重
+    P = norm_df / norm_df.sum(axis=0)
+    n_models = norm_df.shape[0]
+
+    if n_models <= 1:
+        entropy = pd.Series(
+            np.zeros(len(metric_cols)),
+            index=metric_cols
+        )
+    else:
+        entropy = -1.0 / np.log(n_models) * (P * np.log(P)).sum(axis=0)
+
+    difference = 1 - entropy
+
+    if difference.sum() == 0:
+        entropy_weight = pd.Series(
+            np.ones(len(metric_cols)) / len(metric_cols),
+            index=metric_cols
+        )
+    else:
+        entropy_weight = difference / difference.sum()
+
+    # 熵权-TOPSIS距离计算
+    best = norm_df.max(axis=0)
+    worst = norm_df.min(axis=0)
+
+    d_best = np.sqrt(
+        ((norm_df - best) ** 2 * entropy_weight).sum(axis=1)
+    )
+
+    d_worst = np.sqrt(
+        ((norm_df - worst) ** 2 * entropy_weight).sum(axis=1)
+    )
+
+    df["Positive_Distance"] = d_best
+    df["Negative_Distance"] = d_worst
+    df["TOPSIS_Score"] = d_worst / (d_best + d_worst)
+
+    df = df.sort_values(
+        "TOPSIS_Score",
+        ascending=False
+    )
+
+    df["TOPSIS_Rank"] = range(
+        1,
+        len(df) + 1
+    )
+
+    df["TOPSIS_Weight"] = (
+        df["TOPSIS_Score"]
+        /
+        df["TOPSIS_Score"].sum()
+    )
+
+    # 将熵权结果写入每一行，方便Excel中查看
+    for col in metric_cols:
+        df[f"Entropy_Weight_{col}"] = entropy_weight[col]
+        df[f"Entropy_{col}"] = entropy[col]
+        df[f"Difference_Coefficient_{col}"] = difference[col]
+
+    return df
+
+
+# =========================
+# TOPSIS加权集成模型
+# =========================
+class TOPSISWeightedEnsemble(BaseEstimator, RegressorMixin):
+    def __init__(self, models, weights):
+        self.models = models
+        self.weights = np.array(
+            weights,
+            dtype=float
+        )
+
+        if len(self.models) != len(self.weights):
+            raise ValueError("模型数量与权重数量不一致。")
+
+        self.model_names = list(self.models.keys())
+        self.weights_dict = dict(
+            zip(
+                self.model_names,
+                self.weights
+            )
+        )
+
+    def fit(self, X, y):
+        for model in self.models.values():
+            model.fit(
+                X,
+                y
+            )
+
+        return self
+
+    def predict(self, X):
+        pred = np.zeros(
+            X.shape[0],
+            dtype=float
+        )
+
+        for name, model in self.models.items():
+            pred += model.predict(X) * self.weights_dict[name]
+
+        return pred
+
+    def get_model_weights(self):
+        return self.weights_dict
+
+
+# =========================
+# 字体强制设置
+# =========================
+def force_font(fig):
+    for ax in fig.axes:
+        for item in ax.get_xticklabels() + ax.get_yticklabels() + [
+            ax.title,
+            ax.xaxis.label,
+            ax.yaxis.label
+        ]:
+            item.set_fontname("Times New Roman")
+            item.set_fontweight("bold")
+            item.set_fontsize(24)
+
+        legend = ax.get_legend()
+
+        if legend is not None:
+            for text in legend.get_texts():
+                text.set_fontname("Times New Roman")
+                text.set_fontweight("bold")
+                text.set_fontsize(24)
+
+
+# =========================
+# 集成模型图
+# =========================
+def draw_single_model(fig, outer_grid_spec,
+                      y_train_true, y_train_pred,
+                      y_test_true, y_test_pred,
+                      model_name="EnsembleModel",
+                      tag_letter="(a)"):
+
+    y_train_true = np.asarray(y_train_true)
+    y_train_pred = np.asarray(y_train_pred)
+    y_test_true = np.asarray(y_test_true)
+    y_test_pred = np.asarray(y_test_pred)
+
+    resid_train = y_train_pred - y_train_true
+    resid_test = y_test_pred - y_test_true
+
+    train_r2 = r2_score(y_train_true, y_train_pred)
+    test_r2 = r2_score(y_test_true, y_test_pred)
+
+    c_train = "#d62728"
+    c_test = "#1f77b4"
+
+    inner_grid = gridspec.GridSpecFromSubplotSpec(
+        3,
+        2,
+        subplot_spec=outer_grid_spec,
+        width_ratios=[4, 1],
+        height_ratios=[1, 4, 1.2],
+        wspace=0.0,
+        hspace=0.0
+    )
+
+    ax_main = fig.add_subplot(inner_grid[1, 0])
+    ax_top = fig.add_subplot(inner_grid[0, 0], sharex=ax_main)
+    ax_right = fig.add_subplot(inner_grid[1, 1], sharey=ax_main)
+    ax_resid = fig.add_subplot(inner_grid[2, 0], sharex=ax_main)
+
+    ax_main.scatter(
+        y_train_true,
+        y_train_pred,
+        c=c_train,
+        marker="o",
+        alpha=0.45,
+        label="Train",
+        s=25,
+        edgecolors="white",
+        linewidth=0.3
+    )
+
+    ax_main.scatter(
+        y_test_true,
+        y_test_pred,
+        c=c_test,
+        marker="^",
+        alpha=0.45,
+        label="Test",
+        s=25,
+        edgecolors="white",
+        linewidth=0.3
+    )
+
+    all_vals = np.concatenate([
+        y_train_true,
+        y_train_pred,
+        y_test_true,
+        y_test_pred
+    ])
+
+    min_v = all_vals.min()
+    max_v = all_vals.max()
+
+    margin = (max_v - min_v) * 0.05 if max_v > min_v else 1
+
+    lims = [
+        min_v - margin,
+        max_v + margin
+    ]
+
+    ax_main.plot(
+        lims,
+        lims,
+        "k--",
+        alpha=0.75,
+        linewidth=1.5
+    )
+
+    ax_main.set_xlim(lims)
+    ax_main.set_ylim(lims)
+
+    try:
+        line_x = np.linspace(lims[0], lims[1], 200)
+
+        lr_train = LinearRegression().fit(
+            y_train_true.reshape(-1, 1),
+            y_train_pred
+        )
+
+        lr_test = LinearRegression().fit(
+            y_test_true.reshape(-1, 1),
+            y_test_pred
+        )
+
+        ax_main.plot(
+            line_x,
+            lr_train.predict(line_x.reshape(-1, 1)),
+            c=c_train,
+            lw=1.5
+        )
+
+        ax_main.plot(
+            line_x,
+            lr_test.predict(line_x.reshape(-1, 1)),
+            c=c_test,
+            lw=1.5
+        )
+
+    except Exception:
+        pass
+
+    ax_main.legend(
+        loc="upper left",
+        frameon=True,
+        prop={
+            "family": "Times New Roman",
+            "weight": "bold",
+            "size": 24
+        }
+    )
+
+    ax_main.text(
+        0.95,
+        0.05,
+        f"Train $\\mathbf{{R^2}}$ = {train_r2:.4f}\nTest  $\\mathbf{{R^2}}$ = {test_r2:.4f}",
+        transform=ax_main.transAxes,
+        fontsize=24,
+        fontweight="bold",
+        fontname="Times New Roman",
+        ha="right",
+        va="bottom"
+    )
+
+    ax_main.set_ylabel("Predicted Values")
+
+    plt.setp(
+        ax_main.get_xticklabels(),
+        visible=False
+    )
+
+    ax_top.text(
+        -0.10,
+        1.20,
+        tag_letter,
+        transform=ax_top.transAxes,
+        fontsize=24,
+        fontweight="bold",
+        fontname="Times New Roman",
+        va="top",
+        ha="right"
+    )
+
+    ax_top.set_title(
+        model_name,
+        fontsize=24,
+        fontweight="bold",
+        fontname="Times New Roman",
+        y=1.25
+    )
+
+    sns.histplot(
+        y_train_true,
+        ax=ax_top,
+        color=c_train,
+        kde=True,
+        stat="density",
+        bins=20,
+        element="step",
+        alpha=0.35
+    )
+
+    sns.histplot(
+        y_test_true,
+        ax=ax_top,
+        color=c_test,
+        kde=True,
+        stat="density",
+        bins=20,
+        element="step",
+        alpha=0.35
+    )
+
+    ax_top.set_axis_off()
+
+    sns.histplot(
+        y=y_train_pred,
+        ax=ax_right,
+        color=c_train,
+        kde=True,
+        stat="density",
+        bins=20,
+        element="step",
+        alpha=0.35
+    )
+
+    sns.histplot(
+        y=y_test_pred,
+        ax=ax_right,
+        color=c_test,
+        kde=True,
+        stat="density",
+        bins=20,
+        element="step",
+        alpha=0.35
+    )
+
+    ax_right.set_axis_off()
+
+    ax_resid.scatter(
+        y_train_true,
+        resid_train,
+        c=c_train,
+        marker="o",
+        alpha=0.45,
+        s=20
+    )
+
+    ax_resid.scatter(
+        y_test_true,
+        resid_test,
+        c=c_test,
+        marker="^",
+        alpha=0.45,
+        s=20
+    )
+
+    ax_resid.axhline(
+        0,
+        color="gray",
+        linestyle="--",
+        linewidth=1
+    )
+
+    ax_resid.set_xlabel("True Values")
+    ax_resid.set_ylabel("Residuals")
+
+    max_resid = max(
+        np.max(np.abs(resid_train)),
+        np.max(np.abs(resid_test))
+    )
+
+    if max_resid == 0:
+        max_resid = 1
+
+    ax_resid.set_ylim(
+        -max_resid * 1.1,
+        max_resid * 1.1
+    )
+
+    force_font(fig)
+
+
+def plot_ensemble(target, model, X_train, y_train, X_test, y_test):
+    fig = plt.figure(
+        figsize=(7, 8)
+    )
+
+    outer_grid = gridspec.GridSpec(
+        1,
+        1
+    )
+
+    draw_single_model(
+        fig,
+        outer_grid[0],
+        y_train,
+        model.predict(X_train),
+        y_test,
+        model.predict(X_test),
+        model_name="EnsembleModel",
+        tag_letter="(a)"
+    )
+
+    plt.tight_layout()
+
+    for ext, dpi in [
+        ("png", 300),
+        ("pdf", 1200),
+        ("tif", 300)
+    ]:
+        plt.savefig(
+            os.path.join(
+                output_dir,
+                f"{target}_Entropy_TOPSIS_Weighted_Ensemble.{ext}"
+            ),
+            dpi=dpi,
+            bbox_inches="tight"
+        )
+
+    plt.close(fig)
+
+
+# =========================
+# 主程序
+# =========================
+def main():
+    df = load_data(file_path)
+
+    feature_cols = df.columns[:7].tolist()
+
+    data = df[
+        feature_cols + [target_col]
+    ].dropna(
+        subset=[target_col]
+    ).copy()
+
+    X = data[feature_cols]
+    y = data[target_col]
+
+    X_train_raw, X_test_raw, y_train, y_test = spxy_split(
+        X,
+        y,
+        test_size=0.3
+    )
+
+    print("\nData splitting method: SPXY")
+    print("Target:", target_col)
+    print(f"Training samples: {len(X_train_raw)}")
+    print(f"Testing samples : {len(X_test_raw)}")
+
+    imputer = KNNImputer(
+        n_neighbors=5,
+        weights="uniform"
+    )
+
+    X_train = pd.DataFrame(
+        imputer.fit_transform(X_train_raw),
+        columns=feature_cols,
+        index=X_train_raw.index
+    )
+
+    X_test = pd.DataFrame(
+        imputer.transform(X_test_raw),
+        columns=feature_cols,
+        index=X_test_raw.index
+    )
+
+    X_train, X_test, log_cols = log_transform_om_cd(
+        X_train,
+        X_test
+    )
+
+    print("Log1p transformed columns:", log_cols)
+
+    rows = []
+    pred_rows = []
+    infos = []
+
+    for name in model_names:
+        print(f"\nOptimizing {target_col} - {name}")
+
+        try:
+            model, params, cv_r2 = bayes_optimize(
+                name,
+                X_train,
+                y_train
+            )
+
+            model.fit(
+                X_train,
+                y_train
+            )
+
+            train_pred = model.predict(X_train)
+            test_pred = model.predict(X_test)
+
+            row = {
+                "Target": target_col,
+                "Model": name,
+                "Best_CV_R2": cv_r2,
+                "Best_Params": str(params),
+                "Status": "Success",
+                "Error": ""
+            }
+
+            row.update(
+                calc_metrics(
+                    y_train,
+                    train_pred,
+                    "Train"
+                )
+            )
+
+            row.update(
+                calc_metrics(
+                    y_test,
+                    test_pred,
+                    "Test"
+                )
+            )
+
+            row["Overfit_Gap"] = row["Train_R2"] - row["Test_R2"]
+
+            rows.append(row)
+
+            infos.append({
+                "Model": name,
+                "ModelObj": model
+            })
+
+            pred_rows.append(pd.DataFrame({
+                "Target": target_col,
+                "Model": name,
+                "Dataset": "Train",
+                "Observed": y_train.values,
+                "Predicted": train_pred
+            }))
+
+            pred_rows.append(pd.DataFrame({
+                "Target": target_col,
+                "Model": name,
+                "Dataset": "Test",
+                "Observed": y_test.values,
+                "Predicted": test_pred
+            }))
+
+            print(
+                f"{name}: "
+                f"CV R2={cv_r2:.4f}, "
+                f"Train R2={row['Train_R2']:.4f}, "
+                f"Test R2={row['Test_R2']:.4f}, "
+                f"Gap={row['Overfit_Gap']:.4f}"
+            )
+
+        except Exception as e:
+            rows.append({
+                "Target": target_col,
+                "Model": name,
+                "Best_CV_R2": np.nan,
+                "Best_Params": "",
+                "Status": "Failed",
+                "Error": str(e),
+                "Train_MSE": np.nan,
+                "Train_RMSE": np.nan,
+                "Train_MAE": np.nan,
+                "Train_R2": np.nan,
+                "Test_MSE": np.nan,
+                "Test_RMSE": np.nan,
+                "Test_MAE": np.nan,
+                "Test_R2": np.nan,
+                "Overfit_Gap": np.nan
+            })
+
+            print(f"{name} failed: {e}")
+
+    result_df = pd.DataFrame(rows)
+
+    success = result_df[
+        result_df["Status"] == "Success"
+    ].copy()
+
+    ranked = topsis_ranking(success)
+
+    top3_names = ranked.head(3)["Model"].tolist()
+
+    top3_ranked = ranked[
+        ranked["Model"].isin(top3_names)
+    ].copy()
+
+    top3_ranked["Ensemble_Weight"] = (
+        top3_ranked["TOPSIS_Score"]
+        /
+        top3_ranked["TOPSIS_Score"].sum()
+    )
+
+    weight_map = dict(
+        zip(
+            top3_ranked["Model"],
+            top3_ranked["Ensemble_Weight"]
+        )
+    )
+
+    top3_infos = [
+        info for info in infos
+        if info["Model"] in top3_names
+    ]
+
+    top3_infos = sorted(
+        top3_infos,
+        key=lambda x: top3_names.index(x["Model"])
+    )
+
+    ensemble_models = {
+        info["Model"]: info["ModelObj"]
+        for info in top3_infos
+    }
+
+    ensemble_weights = [
+        weight_map[name]
+        for name in ensemble_models.keys()
+    ]
+
+    ensemble = TOPSISWeightedEnsemble(
+        models=ensemble_models,
+        weights=ensemble_weights
+    )
+
+    ensemble.fit(
+        X_train,
+        y_train
+    )
+
+    ensemble_train = ensemble.predict(X_train)
+    ensemble_test = ensemble.predict(X_test)
+
+    ensemble_row = {
+        "Target": target_col,
+        "Model": "Entropy_TOPSIS_Weighted_Ensemble",
+        "Best_CV_R2": np.nan,
+        "Best_Params": "Weighted ensemble based on entropy-weight TOPSIS top 3",
+        "Status": "Success",
+        "Error": "",
+        "Base_Models": " + ".join(top3_names),
+        "Base_Model_Weights": str(ensemble.get_model_weights())
+    }
+
+    ensemble_row.update(
+        calc_metrics(
+            y_train,
+            ensemble_train,
+            "Train"
+        )
+    )
+
+    ensemble_row.update(
+        calc_metrics(
+            y_test,
+            ensemble_test,
+            "Test"
+        )
+    )
+
+    ensemble_row["Overfit_Gap"] = ensemble_row["Train_R2"] - ensemble_row["Test_R2"]
+
+    final_df = pd.concat(
+        [
+            ranked,
+            pd.DataFrame([ensemble_row])
+        ],
+        ignore_index=True
+    )
+
+    pred_rows.append(pd.DataFrame({
+        "Target": target_col,
+        "Model": "Entropy_TOPSIS_Weighted_Ensemble",
+        "Dataset": "Train",
+        "Observed": y_train.values,
+        "Predicted": ensemble_train
+    }))
+
+    pred_rows.append(pd.DataFrame({
+        "Target": target_col,
+        "Model": "Entropy_TOPSIS_Weighted_Ensemble",
+        "Dataset": "Test",
+        "Observed": y_test.values,
+        "Predicted": ensemble_test
+    }))
+
+    pred_df = pd.concat(
+        pred_rows,
+        ignore_index=True
+    )
+
+    plot_ensemble(
+        target_col,
+        ensemble,
+        X_train,
+        y_train.values,
+        X_test,
+        y_test.values
+    )
+
+    save_path = os.path.join(
+        output_dir,
+        f"{target_col}_SPXY_log1p_Bayes_Entropy_TOPSIS_Weighted_Ensemble_Results.xlsx"
+    )
+
+    with pd.ExcelWriter(save_path) as writer:
+        final_df.to_excel(
+            writer,
+            sheet_name="Model_Performance",
+            index=False
+        )
+
+        pred_df.to_excel(
+            writer,
+            sheet_name="Prediction_Result",
+            index=False
+        )
+
+        top3_ranked.to_excel(
+            writer,
+            sheet_name="TOP3_Entropy_TOPSIS_Weights",
+            index=False
+        )
+
+        pd.DataFrame({
+            "Target": [target_col],
+            "Splitting_Method": ["SPXY based on joint X-Y distances"],
+            "Imputation": ["KNNImputer(n_neighbors=5, weights='uniform')"],
+            "Transform_Columns": [", ".join(log_cols)],
+            "Transform_Method": ["np.log1p after KNN imputation"],
+            "Train_Test_Split": ["7:3"],
+            "Random_State": [random_state],
+            "n_trials": [n_trials]
+        }).to_excel(
+            writer,
+            sheet_name="Preprocessing_Info",
+            index=False
+        )
+
+    print("\nSaved:")
+    print(save_path)
+
+    print("\nFigures saved in:")
+    print(output_dir)
+
+
+if __name__ == "__main__":
+    main()
