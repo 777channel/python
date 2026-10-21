@@ -35,7 +35,7 @@ checkpoints/
 *.hdf5
 *.bin
 
-# Data and generated outputs stay in OneDrive
+# Other data and generated outputs stay in OneDrive
 data/
 datasets/
 output*/
@@ -63,3 +63,63 @@ results*/
 *.tmp
 *.bak
 ~$*
+
+# Explicitly version the training and preprocessing CSV datasets
+!/output/
+!/output/模型结果/
+!/机器学习/特征工程和归一化/归一化/results/
+!/forexample/fully_processed_data(4).csv
+!/forexample/fully_processed_data(5).csv
+!/imputation_output_all_features_stratified_single_plot_cn/imputed_data_KNN_Imputation_all_features.csv
+!/imputation_output_all_features_stratified_single_plot_cn/imputed_data_Mean_Imputation_all_features.csv
+!/imputation_output_all_features_stratified_single_plot_cn/imputed_data_Median_Imputation_all_features.csv
+!/imputation_output_all_features_stratified_single_plot_cn/imputed_data_Random_Forest_Imputation_all_features.csv
+!/interpolation_grouped_data.csv
+!/knn_encoded_data.csv
+!/naturliche Aging.csv
+!/output/模型结果/fully_processed_data(3).csv
+!/output/模型结果/fully_processed_data(4).csv
+!/output/模型结果/fully_processed_data(5).csv
+!/preprocessed_data.csv
+!/rf_encoded_data.csv
+!/人工老化机器学习数据填充/imputed_data_KNN_Imputation_all_features.csv
+!/人工老化机器学习数据填充/imputed_data_Mean_Imputation_all_features.csv
+!/人工老化机器学习数据填充/imputed_data_Median_Imputation_all_features.csv
+!/人工老化机器学习数据填充/imputed_data_Random_Forest_Imputation_all_features.csv
+!/微塑料机器学习输出/imputed_data_KNN_Imputation_all_features.csv
+!/微塑料机器学习输出/imputed_data_Mean_Imputation_all_features.csv
+!/微塑料机器学习输出/imputed_data_Median_Imputation_all_features.csv
+!/微塑料机器学习输出/imputed_data_Random_Forest_Imputation_all_features.csv
+!/机器学习/微塑料机器学习输出/微塑料+cd缺失值填充/data_imputed_KNN_Imputation.csv
+!/机器学习/微塑料机器学习输出/微塑料+cd缺失值填充/data_imputed_Mean_Imputation.csv
+!/机器学习/微塑料机器学习输出/微塑料+cd缺失值填充/data_imputed_Median_Imputation.csv
+!/机器学习/微塑料机器学习输出/微塑料+cd缺失值填充/data_imputed_Random_Forest_Imputation.csv
+!/机器学习/特征工程和归一化/feature_engineering/engineered_features.csv
+!/机器学习/特征工程和归一化/feature_engineering/feature_abbreviation_mapping.csv
+!/机器学习/特征工程和归一化/归一化/results/fully_processed_data(4).csv
+!/机器学习/缺失值填充/feature_engineering/engineered_features.csv
+!/机器学习/缺失值填充/interpolation_grouped_data.csv
+!/机器学习/缺失值填充/interpolation_imputed_data_optimized.csv
+!/机器学习/缺失值填充/knn_encoded_data.csv
+!/机器学习/缺失值填充/knn_imputed_data_optimized.csv
+!/机器学习/缺失值填充/mean_imputed_data.csv
+!/机器学习/缺失值填充/preprocessed_data.csv
+!/机器学习/缺失值填充/rf_encoded_data.csv
+!/机器学习/缺失值填充/rf_imputed_data.csv
+!/机器学习/缺失值填充/填充结果与PDF图表/data_final_KNN.csv
+!/机器学习/缺失值填充/填充结果与PDF图表/data_final_Mean.csv
+!/机器学习/缺失值填充/填充结果与PDF图表/data_final_Median.csv
+!/机器学习/缺失值填充/填充结果与PDF图表/data_final_RF.csv
+!/机器学习/老化机器学习output/填充文件和填充图/CEC列填充/CEC_imputed_with_KNN_Imputation.csv
+!/机器学习/老化机器学习output/填充文件和填充图/CEC列填充/CEC_imputed_with_Mean_Imputation.csv
+!/机器学习/老化机器学习output/填充文件和填充图/CEC列填充/CEC_imputed_with_Median_Imputation.csv
+!/机器学习/老化机器学习output/填充文件和填充图/CEC列填充/CEC_imputed_with_Random_Forest_Imputation.csv
+!/机器学习/老化机器学习output/填充文件和填充图/CEC列填充/data.csv
+!/机器学习/老化机器学习output/填充文件和填充图/imputed_data_KNN_Imputation_all_features.csv
+!/机器学习/老化机器学习output/填充文件和填充图/imputed_data_Mean_Imputation_all_features.csv
+!/机器学习/老化机器学习output/填充文件和填充图/imputed_data_Median_Imputation_all_features.csv
+!/机器学习/老化机器学习output/填充文件和填充图/imputed_data_Random_Forest_Imputation_all_features.csv
+!/自然老化机器学习数据填充/imputed_data_KNN_Imputation_all_features.csv
+!/自然老化机器学习数据填充/imputed_data_Mean_Imputation_all_features.csv
+!/自然老化机器学习数据填充/imputed_data_Median_Imputation_all_features.csv
+!/自然老化机器学习数据填充/imputed_data_Random_Forest_Imputation_all_features.csv
